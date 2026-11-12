@@ -1,0 +1,726 @@
+name: Build MultiWorld
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Create project files
+        run: |
+          mkdir -p MultiWorld/src/main/java/multiworld MultiWorld/src/main/resources
+
+          cat > MultiWorld/pom.xml <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>multiworld</groupId>
+            <artifactId>MultiWorld</artifactId>
+            <version>1.0.0</version>
+            <packaging>jar</packaging>
+            <properties>
+              <maven.compiler.source>17</maven.compiler.source>
+              <maven.compiler.target>17</maven.compiler.target>
+              <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+            </properties>
+            <repositories>
+              <repository>
+                <id>repo-lanink-cn</id>
+                <url>https://repo.lanink.cn/repository/maven-public/</url>
+              </repository>
+            </repositories>
+            <dependencies>
+              <dependency>
+                <groupId>com.nukkit-mot</groupId>
+                <artifactId>nukkit-mot</artifactId>
+                <version>1.26.30-R1</version>
+                <scope>provided</scope>
+              </dependency>
+            </dependencies>
+            <build>
+              <finalName>MultiWorld</finalName>
+            </build>
+          </project>
+          EOF
+
+          cat > MultiWorld/src/main/resources/plugin.yml <<'EOF'
+          name: MultiWorld
+          main: multiworld.MultiWorld
+          version: 1.0.0
+          api: ["1.0.0"]
+          load: STARTUP
+          author: server
+          description: Мультимиры, защита миров и спавн
+          commands:
+            spawn:
+              description: Телепорт на спавн (ждать 5 секунд)
+              usage: "/spawn"
+              permission: multiworld.spawn
+            mwcreate:
+              description: Создать пустой мир с каменной платформой 5x5
+              usage: "/mwcreate <1-30>"
+              permission: multiworld.mwcreate
+            mwncreate:
+              description: Создать мир с земляной платформой 500x500
+              usage: "/mwncreate <1-30>"
+              permission: multiworld.mwncreate
+            setspawn:
+              description: Установить точку спавна
+              usage: "/setspawn <id мира> <x> <y> <z>"
+              permission: multiworld.setspawn
+            mwdef:
+              description: Защита мира от строительства и ломания
+              usage: "/mwdef <id мира> <on/off>"
+              permission: multiworld.mwdef
+            mwtp:
+              description: Телепорт в мир
+              usage: "/mwtp <id мира> [x y z]"
+              permission: multiworld.mwtp
+          permissions:
+            multiworld.spawn:
+              description: Команда /spawn
+              default: true
+            multiworld.mwcreate:
+              description: Команда /mwcreate
+              default: op
+            multiworld.mwncreate:
+              description: Команда /mwncreate
+              default: op
+            multiworld.setspawn:
+              description: Команда /setspawn
+              default: op
+            multiworld.mwdef:
+              description: Команда /mwdef
+              default: op
+            multiworld.mwtp:
+              description: Команда /mwtp
+              default: op
+            multiworld.bypass:
+              description: Строить и ломать в защищенных мирах
+              default: false
+          EOF
+
+          cat > MultiWorld/src/main/java/multiworld/MwStoneGen.java <<'EOF'
+          package multiworld;
+
+          import cn.nukkit.level.ChunkManager;
+          import cn.nukkit.level.format.FullChunk;
+          import cn.nukkit.level.generator.Generator;
+          import cn.nukkit.math.NukkitRandom;
+          import cn.nukkit.math.Vector3;
+
+          import java.util.HashMap;
+          import java.util.Map;
+
+          public class MwStoneGen extends Generator {
+
+              private ChunkManager level;
+              private final Map<String, Object> options;
+
+              public MwStoneGen() {
+                  this(new HashMap<String, Object>());
+              }
+
+              public MwStoneGen(Map<String, Object> options) {
+                  this.options = options;
+              }
+
+              @Override
+              public int getId() {
+                  return Generator.TYPE_INFINITE;
+              }
+
+              @Override
+              public void init(ChunkManager level, NukkitRandom random) {
+                  this.level = level;
+              }
+
+              @Override
+              public void generateChunk(int chunkX, int chunkZ) {
+                  FullChunk chunk = level.getChunk(chunkX, chunkZ);
+                  for (int x = 0; x < 16; x++) {
+                      int wx = (chunkX << 4) + x;
+                      for (int z = 0; z < 16; z++) {
+                          int wz = (chunkZ << 4) + z;
+                          chunk.setBiomeId(x, z, 1);
+                          if (wx >= -2 && wx <= 2 && wz >= -2 && wz <= 2) {
+                              chunk.setBlockId(x, 0, z, 1); // камень
+                          }
+                      }
+                  }
+              }
+
+              @Override
+              public void populateChunk(int chunkX, int chunkZ) {
+              }
+
+              @Override
+              public Map<String, Object> getSettings() {
+                  return options;
+              }
+
+              @Override
+              public String getName() {
+                  return "mwstone";
+              }
+
+              @Override
+              public Vector3 getSpawn() {
+                  return new Vector3(0.5, 1, 0.5);
+              }
+
+              @Override
+              public ChunkManager getChunkManager() {
+                  return level;
+              }
+          }
+          EOF
+
+          cat > MultiWorld/src/main/java/multiworld/MwBigGen.java <<'EOF'
+          package multiworld;
+
+          import cn.nukkit.level.ChunkManager;
+          import cn.nukkit.level.format.FullChunk;
+          import cn.nukkit.level.generator.Generator;
+          import cn.nukkit.math.NukkitRandom;
+          import cn.nukkit.math.Vector3;
+
+          import java.util.HashMap;
+          import java.util.Map;
+
+          public class MwBigGen extends Generator {
+
+              private ChunkManager level;
+              private final Map<String, Object> options;
+
+              public MwBigGen() {
+                  this(new HashMap<String, Object>());
+              }
+
+              public MwBigGen(Map<String, Object> options) {
+                  this.options = options;
+              }
+
+              @Override
+              public int getId() {
+                  return Generator.TYPE_INFINITE;
+              }
+
+              @Override
+              public void init(ChunkManager level, NukkitRandom random) {
+                  this.level = level;
+              }
+
+              @Override
+              public void generateChunk(int chunkX, int chunkZ) {
+                  FullChunk chunk = level.getChunk(chunkX, chunkZ);
+                  for (int x = 0; x < 16; x++) {
+                      int wx = (chunkX << 4) + x;
+                      for (int z = 0; z < 16; z++) {
+                          int wz = (chunkZ << 4) + z;
+                          chunk.setBiomeId(x, z, 1);
+                          // 500x500: от -250 до 249
+                          if (wx >= -250 && wx <= 249 && wz >= -250 && wz <= 249) {
+                              for (int y = 0; y < 9; y++) {
+                                  chunk.setBlockId(x, y, z, 3); // земля
+                              }
+                              chunk.setBlockId(x, 9, z, 2); // трава сверху (y=9, всего 10 слоев)
+                          }
+                      }
+                  }
+              }
+
+              @Override
+              public void populateChunk(int chunkX, int chunkZ) {
+              }
+
+              @Override
+              public Map<String, Object> getSettings() {
+                  return options;
+              }
+
+              @Override
+              public String getName() {
+                  return "mwbig";
+              }
+
+              @Override
+              public Vector3 getSpawn() {
+                  return new Vector3(0.5, 10, 0.5);
+              }
+
+              @Override
+              public ChunkManager getChunkManager() {
+                  return level;
+              }
+          }
+          EOF
+
+          cat > MultiWorld/src/main/java/multiworld/MultiWorld.java <<'EOF'
+          package multiworld;
+
+          import cn.nukkit.Player;
+          import cn.nukkit.command.Command;
+          import cn.nukkit.command.CommandSender;
+          import cn.nukkit.event.EventHandler;
+          import cn.nukkit.event.EventPriority;
+          import cn.nukkit.event.Listener;
+          import cn.nukkit.event.block.BlockBreakEvent;
+          import cn.nukkit.event.block.BlockPlaceEvent;
+          import cn.nukkit.event.player.PlayerBucketEmptyEvent;
+          import cn.nukkit.event.player.PlayerBucketFillEvent;
+          import cn.nukkit.event.player.PlayerJoinEvent;
+          import cn.nukkit.level.Level;
+          import cn.nukkit.level.Location;
+          import cn.nukkit.level.generator.Generator;
+          import cn.nukkit.math.Vector3;
+          import cn.nukkit.plugin.PluginBase;
+          import cn.nukkit.scheduler.Task;
+          import cn.nukkit.utils.Config;
+          import cn.nukkit.utils.TextFormat;
+
+          import java.io.File;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.UUID;
+
+          public class MultiWorld extends PluginBase implements Listener {
+
+              private Config cfg;
+              private final Set<Integer> prot = new HashSet<Integer>();
+              private final Map<UUID, SpawnTask> pending = new HashMap<UUID, SpawnTask>();
+
+              @Override
+              public void onLoad() {
+                  Generator.addGenerator(MwStoneGen.class, "mwstone");
+                  Generator.addGenerator(MwBigGen.class, "mwbig");
+              }
+
+              @Override
+              public void onEnable() {
+                  getDataFolder().mkdirs();
+                  cfg = new Config(new File(getDataFolder(), "worlds.yml"), Config.YAML);
+                  for (int id = 0; id <= 32; id++) {
+                      if (cfg.getBoolean("protect-" + id, false)) {
+                          prot.add(id);
+                      }
+                  }
+                  for (int id = 1; id <= 30; id++) {
+                      String n = levelName(id);
+                      if (getServer().getLevelByName(n) == null
+                              && new File(getServer().getDataPath() + "worlds/" + n).exists()) {
+                          getServer().loadLevel(n);
+                      }
+                  }
+                  getServer().getPluginManager().registerEvents(this, this);
+                  getLogger().info("MultiWorld включен");
+              }
+
+              // ---------- миры ----------
+
+              private String levelName(int id) {
+                  if (id == 31) return "nether";
+                  if (id == 32) return "the_end";
+                  return "mw" + id;
+              }
+
+              /** Мир по ID, загружает с диска при необходимости. */
+              private Level getWorld(int id) {
+                  if (id == 0) return getServer().getDefaultLevel();
+                  String n = levelName(id);
+                  Level l = getServer().getLevelByName(n);
+                  if (l == null && new File(getServer().getDataPath() + "worlds/" + n).exists()) {
+                      getServer().loadLevel(n);
+                      l = getServer().getLevelByName(n);
+                  }
+                  return l;
+              }
+
+              /** Мир по ID, только если уже загружен. */
+              private Level loadedWorld(int id) {
+                  if (id == 0) return getServer().getDefaultLevel();
+                  return getServer().getLevelByName(levelName(id));
+              }
+
+              private int parseInt(String s) {
+                  try {
+                      return Integer.parseInt(s.trim());
+                  } catch (Exception e) {
+                      return -1;
+                  }
+              }
+
+              private Vector3 defaultPoint(int id, Level l) {
+                  String t = cfg.getString("type-" + id, "");
+                  if (t.equals("big")) return new Vector3(0.5, 10, 0.5);
+                  if (t.equals("stone")) return new Vector3(0.5, 1, 0.5);
+                  return l.getSpawnLocation();
+              }
+
+              private void tp(Player p, Location loc) {
+                  try {
+                      loc.getLevel().loadChunk(((int) Math.floor(loc.x)) >> 4, ((int) Math.floor(loc.z)) >> 4, true);
+                  } catch (Throwable ignored) {
+                  }
+                  p.teleport(loc);
+              }
+
+              private Location spawnLocation() {
+                  int wid = cfg.getInt("spawn-world", 0);
+                  Level l = getWorld(wid);
+                  if (l != null && cfg.exists("spawn-x")) {
+                      return new Location(cfg.getDouble("spawn-x", 0.5), cfg.getDouble("spawn-y", 64),
+                              cfg.getDouble("spawn-z", 0.5), 0, 0, l);
+                  }
+                  Level d = getServer().getDefaultLevel();
+                  Vector3 v = d.getSpawnLocation();
+                  return new Location(v.x, v.y, v.z, 0, 0, d);
+              }
+
+              private void goSpawn(Player p) {
+                  tp(p, spawnLocation());
+              }
+
+              // ---------- команды ----------
+
+              @Override
+              public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+                  String name = command.getName().toLowerCase();
+                  switch (name) {
+                      case "spawn":
+                          return cmdSpawn(sender);
+                      case "mwcreate":
+                          return cmdCreate(sender, args, false);
+                      case "mwncreate":
+                          return cmdCreate(sender, args, true);
+                      case "setspawn":
+                          return cmdSetSpawn(sender, args);
+                      case "mwdef":
+                          return cmdDef(sender, args);
+                      case "mwtp":
+                          return cmdTp(sender, args);
+                      default:
+                          return false;
+                  }
+              }
+
+              private boolean cmdSpawn(CommandSender s) {
+                  if (!(s instanceof Player)) {
+                      s.sendMessage(TextFormat.RED + "Только для игроков.");
+                      return true;
+                  }
+                  Player p = (Player) s;
+                  SpawnTask old = pending.remove(p.getUniqueId());
+                  if (old != null) old.stop();
+                  SpawnTask t = new SpawnTask(this, p);
+                  pending.put(p.getUniqueId(), t);
+                  getServer().getScheduler().scheduleDelayedRepeatingTask(this, t, 1, 5);
+                  p.sendMessage(TextFormat.YELLOW + "Телепорт на спавн через 5 секунд. Не двигайся!");
+                  return true;
+              }
+
+              private boolean cmdCreate(CommandSender s, String[] a, boolean big) {
+                  String cmd = big ? "/mwncreate" : "/mwcreate";
+                  if (a.length != 1) {
+                      s.sendMessage(TextFormat.RED + "Используй: " + cmd + " <ID от 1 до 30>");
+                      return true;
+                  }
+                  int id = parseInt(a[0]);
+                  if (id < 1 || id > 30) {
+                      s.sendMessage(TextFormat.RED + "ID мира должен быть числом от 1 до 30.");
+                      return true;
+                  }
+                  String lname = levelName(id);
+                  if (getServer().getLevelByName(lname) != null
+                          || new File(getServer().getDataPath() + "worlds/" + lname).exists()) {
+                      s.sendMessage(TextFormat.RED + "Мир с ID " + id + " уже существует. Выбери другой ID.");
+                      return true;
+                  }
+                  s.sendMessage(TextFormat.YELLOW + "Создаю мир " + id + "...");
+                  Class<? extends Generator> gen = big ? MwBigGen.class : MwStoneGen.class;
+                  boolean ok = false;
+                  try {
+                      ok = getServer().generateLevel(lname, System.nanoTime(), gen);
+                  } catch (Throwable t) {
+                      getLogger().error("Ошибка создания мира " + lname, t);
+                  }
+                  Level lvl = getServer().getLevelByName(lname);
+                  if (!ok || lvl == null) {
+                      s.sendMessage(TextFormat.RED + "Не удалось создать мир. Смотри консоль.");
+                      return true;
+                  }
+                  lvl.setSpawnLocation(new Vector3(0.5, big ? 10 : 1, 0.5));
+                  for (int cx = -1; cx <= 0; cx++) {
+                      for (int cz = -1; cz <= 0; cz++) {
+                          try {
+                              lvl.loadChunk(cx, cz, true);
+                          } catch (Throwable ignored) {
+                          }
+                      }
+                  }
+                  cfg.set("type-" + id, big ? "big" : "stone");
+                  cfg.save();
+                  s.sendMessage(TextFormat.GREEN + "Мир " + id + " создан. Попасть: /mwtp " + id);
+                  return true;
+              }
+
+              private boolean cmdSetSpawn(CommandSender s, String[] a) {
+                  if (a.length != 4 && !(a.length == 1 && s instanceof Player)) {
+                      s.sendMessage(TextFormat.RED + "Используй: /setspawn <id мира> <x> <y> <z>");
+                      s.sendMessage(TextFormat.GRAY + "Игрок может написать просто /setspawn <id мира>, стоя в этом мире.");
+                      return true;
+                  }
+                  int id = parseInt(a[0]);
+                  if (id < 0 || id > 32) {
+                      s.sendMessage(TextFormat.RED + "ID мира: число от 0 до 32.");
+                      return true;
+                  }
+                  Level l = getWorld(id);
+                  if (l == null) {
+                      s.sendMessage(TextFormat.RED + "Мир с ID " + id + " не найден.");
+                      return true;
+                  }
+                  double x, y, z;
+                  if (a.length == 4) {
+                      try {
+                          x = Double.parseDouble(a[1]);
+                          y = Double.parseDouble(a[2]);
+                          z = Double.parseDouble(a[3]);
+                      } catch (NumberFormatException e) {
+                          s.sendMessage(TextFormat.RED + "Координаты должны быть числами.");
+                          return true;
+                      }
+                  } else {
+                      Player p = (Player) s;
+                      if (p.getLevel() != l) {
+                          s.sendMessage(TextFormat.RED + "Встань в мир " + id + " или укажи координаты.");
+                          return true;
+                      }
+                      x = p.x;
+                      y = p.y;
+                      z = p.z;
+                  }
+                  cfg.set("spawn-world", id);
+                  cfg.set("spawn-x", x);
+                  cfg.set("spawn-y", y);
+                  cfg.set("spawn-z", z);
+                  cfg.save();
+                  s.sendMessage(TextFormat.GREEN + "Спавн установлен: мир " + id + ", " + x + " " + y + " " + z);
+                  return true;
+              }
+
+              private boolean cmdDef(CommandSender s, String[] a) {
+                  if (a.length != 2) {
+                      s.sendMessage(TextFormat.RED + "Используй: /mwdef <id мира> <on/off>");
+                      return true;
+                  }
+                  int id = parseInt(a[0]);
+                  if (id < 0 || id > 32) {
+                      s.sendMessage(TextFormat.RED + "ID мира: число от 0 до 32.");
+                      return true;
+                  }
+                  if (getWorld(id) == null) {
+                      s.sendMessage(TextFormat.RED + "Мир с ID " + id + " не найден.");
+                      return true;
+                  }
+                  String v = a[1].toLowerCase();
+                  boolean on;
+                  if (v.equals("on") || v.equals("true") || v.equals("вкл")) {
+                      on = true;
+                  } else if (v.equals("off") || v.equals("false") || v.equals("выкл")) {
+                      on = false;
+                  } else {
+                      s.sendMessage(TextFormat.RED + "Второй аргумент: on или off.");
+                      return true;
+                  }
+                  if (on) prot.add(id);
+                  else prot.remove(id);
+                  cfg.set("protect-" + id, on);
+                  cfg.save();
+                  s.sendMessage(on
+                          ? TextFormat.GREEN + "Защита мира " + id + " включена."
+                          : TextFormat.YELLOW + "Защита мира " + id + " выключена.");
+                  return true;
+              }
+
+              private boolean cmdTp(CommandSender s, String[] a) {
+                  if (!(s instanceof Player)) {
+                      s.sendMessage(TextFormat.RED + "Только для игроков.");
+                      return true;
+                  }
+                  if (a.length != 1 && a.length != 4) {
+                      s.sendMessage(TextFormat.RED + "Используй: /mwtp <id мира> [x y z]");
+                      return true;
+                  }
+                  int id = parseInt(a[0]);
+                  if (id < 0 || id > 32) {
+                      s.sendMessage(TextFormat.RED + "ID мира: число от 0 до 32.");
+                      return true;
+                  }
+                  Level l = getWorld(id);
+                  if (l == null) {
+                      s.sendMessage(TextFormat.RED + "Мир с ID " + id + " не найден.");
+                      return true;
+                  }
+                  double x, y, z;
+                  if (a.length == 4) {
+                      try {
+                          x = Double.parseDouble(a[1]);
+                          y = Double.parseDouble(a[2]);
+                          z = Double.parseDouble(a[3]);
+                      } catch (NumberFormatException e) {
+                          s.sendMessage(TextFormat.RED + "Координаты должны быть числами.");
+                          return true;
+                      }
+                  } else {
+                      Vector3 v = defaultPoint(id, l);
+                      x = v.x;
+                      y = v.y;
+                      z = v.z;
+                  }
+                  Player p = (Player) s;
+                  tp(p, new Location(x, y, z, p.yaw, p.pitch, l));
+                  s.sendMessage(TextFormat.GREEN + "Телепорт в мир " + id + ".");
+                  return true;
+              }
+
+              // ---------- защита миров ----------
+
+              private boolean isProtected(Level l) {
+                  if (l == null) return false;
+                  for (int id : prot) {
+                      if (loadedWorld(id) == l) return true;
+                  }
+                  return false;
+              }
+
+              private boolean denied(Player p, Level l) {
+                  if (p.isOp()) return false;
+                  if (p.hasPermission("multiworld.bypass")) return false;
+                  return isProtected(l);
+              }
+
+              @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+              public void onBreak(BlockBreakEvent e) {
+                  Player p = e.getPlayer();
+                  if (denied(p, e.getBlock().getLevel())) {
+                      e.setCancelled(true);
+                      p.sendMessage(TextFormat.RED + "В этом мире нельзя ломать и строить.");
+                  }
+              }
+
+              @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+              public void onPlace(BlockPlaceEvent e) {
+                  Player p = e.getPlayer();
+                  if (denied(p, e.getBlock().getLevel())) {
+                      e.setCancelled(true);
+                      p.sendMessage(TextFormat.RED + "В этом мире нельзя ломать и строить.");
+                  }
+              }
+
+              @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+              public void onBucketEmpty(PlayerBucketEmptyEvent e) {
+                  Player p = e.getPlayer();
+                  if (denied(p, p.getLevel())) {
+                      e.setCancelled(true);
+                      p.sendMessage(TextFormat.RED + "В этом мире нельзя ломать и строить.");
+                  }
+              }
+
+              @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+              public void onBucketFill(PlayerBucketFillEvent e) {
+                  Player p = e.getPlayer();
+                  if (denied(p, p.getLevel())) {
+                      e.setCancelled(true);
+                      p.sendMessage(TextFormat.RED + "В этом мире нельзя ломать и строить.");
+                  }
+              }
+
+              // ---------- первый заход ----------
+
+              @EventHandler
+              public void onJoin(PlayerJoinEvent e) {
+                  final Player p = e.getPlayer();
+                  if (!p.hasPlayedBefore()) {
+                      getServer().getScheduler().scheduleDelayedTask(this, new Task() {
+                          @Override
+                          public void onRun(int currentTick) {
+                              if (p.isOnline()) goSpawn(p);
+                          }
+                      }, 20);
+                  }
+              }
+
+              // ---------- задержка /spawn ----------
+
+              private static class SpawnTask extends Task {
+                  private final MultiWorld pl;
+                  private final Player p;
+                  private final double sx, sy, sz;
+                  private int ticks = 0;
+
+                  SpawnTask(MultiWorld pl, Player p) {
+                      this.pl = pl;
+                      this.p = p;
+                      this.sx = p.x;
+                      this.sy = p.y;
+                      this.sz = p.z;
+                  }
+
+                  void stop() {
+                      try {
+                          getHandler().cancel();
+                      } catch (Throwable ignored) {
+                      }
+                  }
+
+                  @Override
+                  public void onRun(int currentTick) {
+                      if (!p.isOnline()) {
+                          pl.pending.remove(p.getUniqueId());
+                          stop();
+                          return;
+                      }
+                      if (p.distanceSquared(new Vector3(sx, sy, sz)) > 0.25) {
+                          p.sendMessage(TextFormat.RED + "Ты подвигался, телепорт отменен.");
+                          pl.pending.remove(p.getUniqueId());
+                          stop();
+                          return;
+                      }
+                      if (ticks >= 100) {
+                          pl.pending.remove(p.getUniqueId());
+                          stop();
+                          pl.goSpawn(p);
+                          p.sendMessage(TextFormat.GREEN + "Ты на спавне.");
+                          return;
+                      }
+                      int left = (int) Math.ceil((100 - ticks) / 20.0);
+                      p.sendPopup(TextFormat.YELLOW + "Телепорт через " + left + " с. Не двигайся!");
+                      ticks += 5;
+                  }
+              }
+          }
+          EOF
+
+      - name: Build
+        run: |
+          cd MultiWorld
+          mvn -B clean package
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: MultiWorld-jar
+          path: MultiWorld/target/MultiWorld.jar
